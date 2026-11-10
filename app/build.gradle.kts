@@ -2,6 +2,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// Release signing comes from GitHub secrets (see README). Without them the build falls back to the debug key.
+val ksFile = System.getenv("KEYSTORE_FILE")?.let { file(it) }?.takeIf { it.exists() }
+
 android {
     namespace = "com.pokeiv"
     compileSdk = 34
@@ -9,14 +13,29 @@ android {
         applicationId = "com.pokeiv"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // Every GitHub build gets a higher number, so a new APK installs over the old one.
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt() + 1
+        versionName = "0.2." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+    }
+    signingConfigs {
+        create("release") {
+            if (ksFile != null) {
+                storeFile = ksFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = "pokeiv"
+                keyPassword = System.getenv("KEYSTORE_PASSWORD")
+            }
+        }
     }
     buildTypes {
-        release { isMinifyEnabled = false; signingConfig = signingConfigs.getByName("debug") }
+        release {
+            isMinifyEnabled = false
+            signingConfig = if (ksFile != null) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+        }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    lint { checkReleaseBuilds = false }
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")

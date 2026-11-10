@@ -25,13 +25,31 @@ object Analyzer {
             val msg = if (sp == null) "Name not recognised (${read.name ?: "?"}) – tap ✎" else "CP not read – tap ✎"
             return ScanResult(sp, read.cp, read.hp, Solution(est, 0.0, 99), 0, false, msg).also { LastScan.result = it }
         }
-        val sols = IvSolver.solve(data, sp, read.cp, read.hp, est)
-        val distinct = sols.map { it.ivs }.distinct()
-        val best = sols.firstOrNull()
-        val confident = distinct.size == 1
+        // Try the normal form and every regional form with this name (e.g. Vulpix / Vulpix (Alola)).
+        val hundo = read.hundoBadge
+        val start = if (hundo) Ivs(15, 15, 15) else est
+        val byForm = data.formsOf(sp).ifEmpty { listOf(sp) }
+            .map { f -> f to IvSolver.solve(data, f, read.cp, read.hp, start).sortedBy { if (Badge.matches(it.ivs, read.stars, hundo)) 0 else 1 } }
+            .filter { it.second.isNotEmpty() }
+        // Prefer forms whose answers agree with the badge; then the normal form.
+        val ranked = byForm.sortedWith(compareBy({ if (it.second.any { s -> Badge.matches(s.ivs, read.stars, hundo) }) 0 else 1 }, { if ('~' in it.first.key) 1 else 0 }))
+        val chosen = ranked.firstOrNull()
+        val species = chosen?.first ?: sp
+        val sols = chosen?.second ?: emptyList()
+        val badgeSols = sols.filter { Badge.matches(it.ivs, read.stars, hundo) }.ifEmpty { sols }
+        val distinct = badgeSols.map { it.ivs }.distinct()
+        val best = badgeSols.firstOrNull()
+        val otherForms = ranked.drop(1).map { it.first.name }
+        val confident = distinct.size == 1 && otherForms.isEmpty()
         if (confident && best != null) cal.learn(read.fractions, best.ivs, false)
-        val msg = when { best == null -> "No IVs fit CP ${read.cp} – tap ✎"; !confident -> "${distinct.size} possible – check ✎"; else -> null }
-        return ScanResult(sp, read.cp, read.hp, best ?: Solution(est, 0.0, 99), distinct.size, confident, msg).also { LastScan.result = it }
+        LastScan.species = species
+        val msg = when {
+            best == null -> "No IVs fit CP ${read.cp} – tap ✎"
+            otherForms.isNotEmpty() -> "Could also be ${otherForms.joinToString()} – check ✎"
+            distinct.size > 1 -> "${distinct.size} possible – check ✎"
+            else -> null
+        }
+        return ScanResult(species, read.cp, read.hp, best ?: Solution(est, 0.0, 99), distinct.size, confident, msg).also { LastScan.result = it }
     }
 
     private fun estimate(cal: Calibration, r: ScreenRead, i: Int): Int =

@@ -14,6 +14,10 @@ data class ScreenRead(
     val fractions: DoubleArray,
     val fullBars: BooleanArray,
     val appraisalFound: Boolean,
+    /** Filled stars on the badge (0–3), or -1 if the badge wasn't found. */
+    val stars: Int = -1,
+    /** Red/pink badge = 100% (hundo). */
+    val hundoBadge: Boolean = false,
 )
 
 /** Reads CP, HP, name (text) and the three appraisal bars (pixels) from a screenshot. */
@@ -59,7 +63,40 @@ object ScreenReader {
 
         val fr = DoubleArray(3) { -1.0 }; val full = BooleanArray(3)
         listOf(atk, def, hpL).forEachIndexed { i, r -> r?.let { measureBar(bmp, it)?.let { (f, red) -> fr[i] = f; full[i] = red } } }
-        return ScreenRead(cp, hp, name, fr, full, atk != null || def != null)
+        val (stars, hundo) = atk?.let { readBadge(bmp, it) } ?: (-1 to false)
+        return ScreenRead(cp, hp, name, fr, full, atk != null || def != null, stars, hundo)
+    }
+
+    private fun isStar(c: Int): Boolean { val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c); return r > 230 && g in 150..225 && b < 150 && g - b > 45 }
+    private fun isPinkBadge(c: Int): Boolean { val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c); return r > 230 && b > g + 10 && g < 190 }
+
+    /**
+     * The badge sits above-left of the "Attack" label. Counts filled (orange/yellow) star blobs and
+     * measures how much of the area is the hundo pink. Tuned on a real hundo screenshot (3 blobs ≈ 1.6×h² px each).
+     */
+    private fun readBadge(bmp: Bitmap, attack: Rect): Pair<Int, Boolean> {
+        val h = attack.height().coerceAtLeast(6)
+        val x0 = maxOf(0, attack.left - 4 * h); val x1 = minOf(bmp.width, attack.left + 6 * h)
+        val y0 = maxOf(0, attack.top - 15 * h); val y1 = maxOf(y0, attack.top - 2 * h)
+        val w = x1 - x0; val ht = y1 - y0
+        if (w <= 0 || ht <= 0) return -1 to false
+        val px = IntArray(w * ht); bmp.getPixels(px, 0, w, x0, y0, w, ht)
+        val seen = BooleanArray(px.size); var pink = 0; var blobs = 0
+        val minBlob = (0.6 * h * h).toInt(); val stack = IntArray(px.size)
+        for (i in px.indices) {
+            if (isPinkBadge(px[i])) pink++
+            if (seen[i] || !isStar(px[i])) continue
+            var sp = 0; var n = 0; stack[sp++] = i; seen[i] = true
+            while (sp > 0) {
+                val p = stack[--sp]; n++
+                val x = p % w; val y = p / w
+                for (q in intArrayOf(if (x > 0) p - 1 else -1, if (x < w - 1) p + 1 else -1, if (y > 0) p - w else -1, if (y < ht - 1) p + w else -1)) {
+                    if (q >= 0 && !seen[q] && isStar(px[q])) { seen[q] = true; stack[sp++] = q }
+                }
+            }
+            if (n >= minBlob) blobs++
+        }
+        return blobs.coerceAtMost(3) to (pink > px.size * 0.08)
     }
 
     private fun isFilled(c: Int): Boolean { val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c); return r > 180 && r - b > 70 && g < r - 25 }

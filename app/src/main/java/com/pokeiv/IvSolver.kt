@@ -74,3 +74,18 @@ object LeagueCalc {
 
     fun fmtLevel(l: Double) = if (l % 1.0 == 0.0) l.toInt().toString() else l.toString()
 }
+
+/** Appraisal badge: stars (0–3) and the red/pink hundo badge. Used to check and rank solutions. */
+object Badge {
+    fun matches(iv: Ivs, stars: Int, hundo: Boolean): Boolean {
+        val sum = iv.atk + iv.def + iv.sta
+        if (hundo) return sum == 45
+        return when (stars) {
+            0 -> sum <= 22
+            1 -> sum in 23..29
+            2 -> sum in 30..36
+            3 -> sum in 37..45
+            else -> true // badge not read
+        }
+    }
+}

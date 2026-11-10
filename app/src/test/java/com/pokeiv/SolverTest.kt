@@ -37,3 +37,45 @@ class SolverTest {
         assertTrue(r.any { it.species.name == "Ursaluna" && it.cap == 2500 && it.cp <= 2500 })
     }
 }
+
+class FormsAndBadgeTest {
+    private val data = GameData.fromJson(File("src/main/assets/seed_data.json").readText())
+
+    @Test fun formsShareScreenName() {
+        val v = data.fuzzyFind("Vulpix")!!
+        assertEquals(listOf("vulpix", "vulpix~alola"), data.formsOf(v).map { it.key })
+        assertEquals("Ninetales (Alola)", data.evolutionsOf(data.find("Vulpix (Alola)")!!).single().name)
+    }
+
+    @Test fun galarianMeowthSolvesOnlyAsGalarian() {
+        val g = data.find("meowth~galarian")!!; val iv = Ivs(10, 12, 14)
+        val m = data.cpm[20.0]!!
+        val cp = CpCalc.cp(g, iv, m); val hp = CpCalc.hp(g, iv, m)
+        assertTrue(IvSolver.solve(data, g, cp, hp, iv).any { it.ivs == iv && it.level == 20.0 })
+        assertTrue(IvSolver.solve(data, data.find("meowth")!!, cp, hp, iv, maxLevel = 51.0).none { it.ivs == iv })
+    }
+
+    @Test fun badgeRanges() {
+        assertTrue(Badge.matches(Ivs(15, 15, 15), 3, true))
+        assertTrue(!Badge.matches(Ivs(15, 15, 14), 3, true))
+        assertTrue(Badge.matches(Ivs(0, 11, 6), 0, false))   // 37% Teddiursa
+        assertTrue(!Badge.matches(Ivs(0, 11, 6), 1, false))
+        assertTrue(Badge.matches(Ivs(13, 4, 4), 0, false))   // 46%
+        assertTrue(Badge.matches(Ivs(12, 15, 12), 3, false)) // manual example, 87%
+    }
+}
+
+class HighLevelTest {
+    @Test fun jellicentReachesLevel46WhenDownloadStopsAt45() {
+        // Simulate a downloaded CP-multiplier table that ends at level 45.
+        val base = GameData.fromJson(File("src/main/assets/seed_data.json").readText())
+        val cut = base.cpm.filterKeys { it <= 45.0 }
+        val data = GameData(base.species, GameData.withAllLevels(cut))
+        val j = data.find("Jellicent")!!; val iv = Ivs(14, 15, 14)
+        val r = LeagueCalc.forChain(data, j, iv, 20.0)
+        val ul = r.single { it.cap == 2500 }
+        assertEquals(2500, ul.cp); assertEquals(46.0, ul.level, 0.0)
+        val gl = r.single { it.cap == 1500 }
+        assertEquals(22.5, gl.level, 0.0)
+    }
+}

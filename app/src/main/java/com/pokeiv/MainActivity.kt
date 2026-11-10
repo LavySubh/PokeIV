@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity() {
         val cal = Calibration(this)
         status.text = buildString {
             append(if (OverlayService.running) "● Overlay running\n" else "○ Overlay stopped\n")
-            append("Pokémon in database: ${DataRepository.speciesCount(this@MainActivity)}\n")
+            append("Pokémon in database: ${DataRepository.speciesCount(this@MainActivity)} (+${DataRepository.formCount(this@MainActivity)} regional forms)\n")
             append("Learned samples: ${cal.sampleCount()} · confirmed scans: ${cal.reads} · manual fixes: ${cal.corrections}\n")
             append("\nHow to use: start the overlay, open a Pokémon in GO, run Appraise until the bars show, then tap the orange IV button.")
             extra?.let { append("\n\n$it") }
