@@ -6,6 +6,7 @@ import android.view.Gravity
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.NumberPicker
@@ -36,9 +37,11 @@ class EditActivity : AppCompatActivity() {
             val p = NumberPicker(this).apply { minValue = 0; maxValue = 15; value = v; wrapSelectorWheel = false }
             col.addView(p); row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); p
         }
+        val buddy = CheckBox(this).apply { text = "Active Best Buddy (CP shown one level higher)"; isChecked = last?.buddyBoost ?: false }
+        val shadow = CheckBox(this).apply { text = "Shadow Pokémon (enables “If Purified”)"; isChecked = last?.shadow ?: false }
         val status = TextView(this)
         val save = Button(this).apply { text = "Save & recalculate" }
-        listOf(name, cp, hp, row, status, save).forEach { root.addView(it) }
+        listOf(name, cp, hp, row, buddy, shadow, status, save).forEach { root.addView(it) }
         setContentView(root)
 
         save.setOnClickListener {
@@ -46,14 +49,14 @@ class EditActivity : AppCompatActivity() {
             val cpV = cp.text.toString().toIntOrNull() ?: run { status.text = "Enter the CP"; return@setOnClickListener }
             val hpV = hp.text.toString().toIntOrNull()
             val ivs = Ivs(pickers[0].value, pickers[1].value, pickers[2].value)
-            val sol = IvSolver.solve(data, sp, cpV, hpV, ivs, window = 0).firstOrNull { it.ivs == ivs }
-            if (sol == null) { status.text = "${sp.name} $ivs can't be CP $cpV${hpV?.let { " / HP $it" } ?: ""} at any level – check the values"; return@setOnClickListener }
+            val sol = IvSolver.solve(data, sp, cpV, hpV, ivs, window = 0, buddy = buddy.isChecked).firstOrNull { it.ivs == ivs }
+            if (sol == null) { status.text = "${sp.name} $ivs can't be CP $cpV${hpV?.let { " / HP $it" } ?: ""} at any level${if (buddy.isChecked) " as active buddy" else ""} – check the values"; return@setOnClickListener }
             val wasWrong = last?.best?.ivs != ivs
             LastScan.read?.let { Calibration(this).learn(it.fractions, ivs, wasWrong) }
-            val res = ScanResult(sp, cpV, hpV, sol, 1, true, null)
+            val res = ScanResult(sp, cpV, hpV, sol, 1, true, null, shadow = shadow.isChecked, purified = last?.purified ?: false, activeBuddy = buddy.isChecked)
             LastScan.result = res
             val (l, r) = Analyzer.format(this, res)
-            if (OverlayService.running) showOverlayResult(l, r) else status.text = "$l\n$r"
+            if (OverlayService.running) showOverlayResult() else status.text = "$l\n$r"
             if (OverlayService.running) finish()
         }
     }

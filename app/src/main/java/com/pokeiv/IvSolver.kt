@@ -12,6 +12,22 @@ data class Ivs(val atk: Int, val def: Int, val sta: Int) {
 
 data class Solution(val ivs: Ivs, val level: Double, val distance: Int)
 
+/**
+ * Modifiers (design decision 8). Only an *active* Best Buddy changes the CP on screen: it is
+ * computed one level higher (level 50 shows as 51). The Best Buddy ribbon alone, Shadow and
+ * Lucky change nothing. Purification is a one-time change: +2 to every IV (max 15), level ≥ 25.
+ */
+object Modifiers {
+    const val BUDDY_LEVELS = 1.0
+    const val PURIFY_MIN_LEVEL = 25.0
+
+    /** CP multiplier used for a Pokémon at [level]; an active buddy uses the next level's multiplier. */
+    fun cpm(data: GameData, level: Double, buddy: Boolean): Double? = data.cpm[if (buddy) level + BUDDY_LEVELS else level]
+
+    fun purifiedIvs(iv: Ivs) = Ivs((iv.atk + 2).coerceAtMost(15), (iv.def + 2).coerceAtMost(15), (iv.sta + 2).coerceAtMost(15))
+    fun purifiedLevel(level: Double) = maxOf(level, PURIFY_MIN_LEVEL)
+}
+
 object CpCalc {
     fun cp(s: Species, iv: Ivs, cpm: Double): Int =
         max(10, floor((s.atk + iv.atk) * sqrt((s.def + iv.def).toDouble()) * sqrt((s.sta + iv.sta).toDouble()) * cpm * cpm / 10).toInt())
@@ -24,17 +40,20 @@ object CpCalc {
  * Bar estimates narrow the search; if nothing fits inside the window, all 4096 IV combos are tried.
  */
 object IvSolver {
-    fun solve(data: GameData, s: Species, cp: Int, hp: Int?, est: Ivs?, window: Int = 1, maxLevel: Double = 51.0): List<Solution> {
+    /** [buddy]: the Pokémon is the active Best Buddy, so its CP/HP are computed one level higher than its real level. */
+    fun solve(data: GameData, s: Species, cp: Int, hp: Int?, est: Ivs?, window: Int = 1, maxLevel: Double = 51.0, buddy: Boolean = false): List<Solution> {
         fun range(v: Int?) = if (v == null) 0..15 else (v - window).coerceAtLeast(0)..(v + window).coerceAtMost(15)
-        var res = search(data, s, cp, hp, range(est?.atk), range(est?.def), range(est?.sta), est, maxLevel)
-        if (res.isEmpty() && est != null) res = search(data, s, cp, hp, 0..15, 0..15, 0..15, est, maxLevel)
+        val top = if (buddy) minOf(maxLevel, 50.0) else maxLevel
+        var res = search(data, s, cp, hp, range(est?.atk), range(est?.def), range(est?.sta), est, top, buddy)
+        if (res.isEmpty() && est != null) res = search(data, s, cp, hp, 0..15, 0..15, 0..15, est, top, buddy)
         return res.sortedWith(compareBy({ it.distance }, { -it.ivs.percent }))
     }
 
-    private fun search(data: GameData, s: Species, cp: Int, hp: Int?, ra: IntRange, rd: IntRange, rs: IntRange, est: Ivs?, maxLevel: Double): List<Solution> {
+    private fun search(data: GameData, s: Species, cp: Int, hp: Int?, ra: IntRange, rd: IntRange, rs: IntRange, est: Ivs?, maxLevel: Double, buddy: Boolean): List<Solution> {
         val out = mutableListOf<Solution>()
-        for ((lvl, m) in data.cpm) {
+        for (lvl in data.cpm.keys) {
             if (lvl > maxLevel) continue
+            val m = Modifiers.cpm(data, lvl, buddy) ?: continue
             for (a in ra) for (d in rd) for (st in rs) {
                 val iv = Ivs(a, d, st)
                 if (hp != null && CpCalc.hp(s, iv, m) != hp) continue
@@ -53,18 +72,20 @@ data class LeagueResult(val species: Species, val cap: Int, val cp: Int, val lev
 object LeagueCalc {
     val CAPS = intArrayOf(1500, 2500)
 
-    fun forChain(data: GameData, s: Species, iv: Ivs, currentLevel: Double, maxLevel: Double = 50.0): List<LeagueResult> {
+    /** [buddy]: compute every level as an active Best Buddy (one level higher), so level 50 can reach the level-51 CP. */
+    fun forChain(data: GameData, s: Species, iv: Ivs, currentLevel: Double, maxLevel: Double = 50.0, buddy: Boolean = false): List<LeagueResult> {
         val out = mutableListOf<LeagueResult>()
         val chain = data.evolutionsOf(s).ifEmpty { listOf(s) }
         for (e in chain) for (cap in CAPS) {
             var best: LeagueResult? = null
-            for ((lvl, m) in data.cpm.toSortedMap()) {
+            for (lvl in data.cpm.keys.sorted()) {
                 if (lvl < currentLevel || lvl > maxLevel) continue
+                val m = Modifiers.cpm(data, lvl, buddy) ?: continue
                 val c = CpCalc.cp(e, iv, m)
                 if (c <= cap) best = LeagueResult(e, cap, c, lvl, false)
             }
             if (best == null) {
-                val m = data.cpm[currentLevel] ?: continue
+                val m = Modifiers.cpm(data, currentLevel, buddy) ?: continue
                 out += LeagueResult(e, cap, CpCalc.cp(e, iv, m), currentLevel, true)
             } else out += best
         }

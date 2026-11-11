@@ -18,6 +18,12 @@ data class ScreenRead(
     val stars: Int = -1,
     /** Red/pink badge = 100% (hundo). */
     val hundoBadge: Boolean = false,
+    /** Shadow Pokémon: violet flame around the sprite, or the PURIFY button / "SHADOW BONUS" text was read. */
+    val shadow: Boolean = false,
+    /** Purified Pokémon: the charged move "Return" was read and there is no PURIFY button (informational only). */
+    val purified: Boolean = false,
+    /** Set as the active buddy: the white speech bubble with two buddy faces next to the sprite. Adds one level to the CP. */
+    val activeBuddy: Boolean = false,
 )
 
 /** Reads CP, HP, name (text) and the three appraisal bars (pixels) from a screenshot. */
@@ -37,10 +43,10 @@ object ScreenReader {
         val h = bmp.height
 
         // CP: "CP4020" near the top of the screen
-        var cp: Int? = null
+        var cp: Int? = null; var cpBox: Rect? = null
         val cpRe = Regex("""[cC][pP]\s*([0-9OoIl|S]{2,5})""")
         for (l in lines.filter { it.boundingBox!!.top < h * 0.3 }) {
-            cpRe.find(l.text.replace(" ", ""))?.let { m -> digits(m.groupValues[1]).toIntOrNull()?.let { if (cp == null) cp = it } }
+            cpRe.find(l.text.replace(" ", ""))?.let { m -> digits(m.groupValues[1]).toIntOrNull()?.let { if (cp == null) { cp = it; cpBox = l.boundingBox } } }
         }
 
         // HP: "225 / 225 HP" -> max HP 225
@@ -64,7 +70,71 @@ object ScreenReader {
         val fr = DoubleArray(3) { -1.0 }; val full = BooleanArray(3)
         listOf(atk, def, hpL).forEachIndexed { i, r -> r?.let { measureBar(bmp, it)?.let { (f, red) -> fr[i] = f; full[i] = red } } }
         val (stars, hundo) = atk?.let { readBadge(bmp, it) } ?: (-1 to false)
-        return ScreenRead(cp, hp, name, fr, full, atk != null || def != null, stars, hundo)
+
+        // Modifiers. The sprite area lies between the CP line and the name/HP line; during an appraisal the
+        // lower half (PURIFY button, moves) is hidden behind the leader's panel, so pixels are the main cue.
+        val allText = lines.joinToString(" ") { it.text }
+        val purifyText = allText.contains("PURIFY", true) || allText.contains("SHADOW BONUS", true)
+        val returnMove = lines.any { it.boundingBox!!.top > h * 0.5 && Regex("""^\s*Return\b""").containsMatchIn(it.text) }
+        val spriteTop = cpBox?.bottom ?: (h * 0.08).toInt()
+        val spriteBottom = (hpLine?.boundingBox?.top ?: (h * 0.42).toInt()) - 1
+        val shadow = purifyText || (spriteBottom > spriteTop && shadowFlame(bmp, spriteTop, spriteBottom))
+        val buddy = cpBox?.let { buddyBubble(bmp, it) } ?: false
+        return ScreenRead(cp, hp, name, fr, full, atk != null || def != null, stars, hundo, shadow, !shadow && returnMove, buddy)
+    }
+
+    /** Violet flame colour: blue well above red, red well above green. Dark navy/blue backgrounds don't pass. */
+    private fun isViolet(c: Int): Boolean { val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c); return b > 120 && b > r + 20 && r > g + 35 }
+
+    /** True when a good share of the sprite area is the violet shadow flame. Samples every 4th pixel. */
+    private fun shadowFlame(bmp: Bitmap, top: Int, bottom: Int): Boolean {
+        val x0 = bmp.width / 5; val x1 = bmp.width * 4 / 5
+        var n = 0; var violet = 0
+        var y = top
+        while (y < bottom) { var x = x0; while (x < x1) { n++; if (isViolet(bmp.getPixel(x, y))) violet++; x += 4 }; y += 4 }
+        return n > 0 && violet > n * 0.06
+    }
+
+    private fun isWhite(c: Int): Boolean { val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c); return minOf(r, g, b) > 225 && maxOf(r, g, b) - minOf(r, g, b) < 22 }
+    private fun isDark(c: Int): Boolean = Color.red(c) + Color.green(c) + Color.blue(c) < 360
+
+    /**
+     * Active-buddy speech bubble: a white circle (≈2.75× the CP text height across) with two dark faces inside,
+     * just below the CP line on the left of the sprite (measured on the Abomasnow CP 2498 screen).
+     * Looks for a round white blob of the right size that contains dark pixels.
+     */
+    private fun buddyBubble(bmp: Bitmap, cp: Rect): Boolean {
+        val ch = cp.height().coerceAtLeast(8)
+        val x0 = bmp.width / 20; val x1 = bmp.width * 9 / 20
+        val y0 = cp.bottom; val y1 = minOf(bmp.height, cp.bottom + 5 * ch)
+        val w = x1 - x0; val ht = y1 - y0
+        if (w <= 0 || ht <= 0) return false
+        val px = IntArray(w * ht); bmp.getPixels(px, 0, w, x0, y0, w, ht)
+        val seen = BooleanArray(px.size); val stack = IntArray(px.size)
+        val minArea = (2.5 * ch * ch).toInt(); val maxArea = (12.0 * ch * ch).toInt()
+        for (i in px.indices) {
+            if (seen[i] || !isWhite(px[i])) continue
+            var sp = 0; var n = 0; stack[sp++] = i; seen[i] = true
+            var bx0 = w; var bx1 = 0; var by0 = ht; var by1 = 0
+            while (sp > 0) {
+                val p = stack[--sp]; n++
+                val x = p % w; val y = p / w
+                if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y
+                for (q in intArrayOf(if (x > 0) p - 1 else -1, if (x < w - 1) p + 1 else -1, if (y > 0) p - w else -1, if (y < ht - 1) p + w else -1)) {
+                    if (q >= 0 && !seen[q] && isWhite(px[q])) { seen[q] = true; stack[sp++] = q }
+                }
+            }
+            if (n < minArea || n > maxArea) continue
+            val bw = bx1 - bx0 + 1; val bh = by1 - by0 + 1
+            val aspect = bw.toDouble() / bh
+            if (aspect < 0.7 || aspect > 1.5) continue
+            if (n < bw * bh * 0.5) continue
+            // The two faces: dark pixels inside the middle of the blob's box.
+            var dark = 0
+            for (y in by0 + bh / 4..by1 - bh / 4) for (x in bx0 + bw / 4..bx1 - bw / 4) if (isDark(px[y * w + x])) dark++
+            if (dark > bw * bh * 0.02) return true
+        }
+        return false
     }
 
     private fun isStar(c: Int): Boolean { val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c); return r > 230 && g in 150..225 && b < 150 && g - b > 45 }
